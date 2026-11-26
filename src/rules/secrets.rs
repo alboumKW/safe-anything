@@ -371,6 +371,12 @@ pub static RULES: &[Rule] = &[
         "A DigitalOcean token is written in the file."
     ),
     secret!(
+        "secret.databricks-token",
+        Critical,
+        r"\bdapi[0-9a-f]{32}(?:-\d)?\b",
+        "A Databricks personal access token is written in the file."
+    ),
+    secret!(
         "secret.twilio-api-key",
         Critical,
         r"\bSK[0-9a-f]{32}\b",

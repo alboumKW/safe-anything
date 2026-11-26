@@ -7,6 +7,8 @@
   token beside a `NEXT_PUBLIC_` or `VITE_` secret, another rule's finding on the same line such as
   `code.eval`, and MCP configs with several keys or JSON-escaped values on one line). Findings on
   such lines get a new baseline hash and show once as new; run `--write-baseline` again.
+- Secrets: new rule `secret.databricks-token` (critical) for Databricks personal access tokens (`dapi`
+  followed by 32 lowercase hex characters, optionally followed by `-` and one digit such as `-2`).
 - Secrets: `secret.env-file` and `secret.env-example-value` now catch values followed by an inline
   `#` comment (quoted or unquoted), leaving the comment out of the masked snippet. A `#` inside an
   unquoted value with no space before it stays part of the value, and placeholders followed by a
