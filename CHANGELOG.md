@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Secrets: when a line holds more than one secret or more than one finding, all secrets on that
+  line are now masked in every finding on it (two tokens of one kind, tokens of different kinds, a
+  token beside a `NEXT_PUBLIC_` or `VITE_` secret, another rule's finding on the same line such as
+  `code.eval`, and MCP configs with several keys or JSON-escaped values on one line). Findings on
+  such lines get a new baseline hash and show once as new; run `--write-baseline` again.
 - Secrets: `secret.env-file` and `secret.env-example-value` now catch values followed by an inline
   `#` comment (quoted or unquoted), leaving the comment out of the masked snippet. A `#` inside an
   unquoted value with no space before it stays part of the value, and placeholders followed by a

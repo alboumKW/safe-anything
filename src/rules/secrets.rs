@@ -59,7 +59,6 @@ pub fn env_not_ignored(root: &Path, env_files: &[String]) -> Option<Finding> {
             severity,
             message,
             fix,
-            secret: None,
         },
     ))
 }
