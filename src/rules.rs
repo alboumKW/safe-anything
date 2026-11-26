@@ -364,6 +364,7 @@ fn render_step(
     raw: &str,
     active: &mut Vec<Redact>,
     rest: &mut Vec<Redact>,
+    short_needles: &[&str],
 ) -> (String, Vec<(usize, usize)>) {
     let mut out = String::with_capacity(raw.len().min(SNIPPET_LIMIT + 4));
     let mut gaps: Vec<(usize, usize)> = Vec::new();
@@ -410,7 +411,7 @@ fn render_step(
             return (out, gaps);
         };
         let replacement = if s.keep_prefix {
-            mask(&raw[s.start..s.end])
+            mask(&raw[s.start..s.end], short_needles)
         } else {
             "****".to_string()
         };
@@ -536,6 +537,11 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
         }
     }
     let max_esc_pad = needles.iter().map(|n| n.len()).max().unwrap_or(0).min(512) * 6;
+    let short_needles: Vec<&str> = needles
+        .iter()
+        .copied()
+        .filter(|n| !n.is_empty() && n.chars().take(5).count() <= 4)
+        .collect();
 
     merge_spans(raw.len(), &mut initial);
     initial.reverse();
@@ -544,7 +550,7 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
     let mut checked_end = 0usize;
 
     for round in 0..MAX_ROUNDS {
-        let (snippet, gaps) = render_step(raw, &mut active, &mut rest);
+        let (snippet, gaps) = render_step(raw, &mut active, &mut rest, &short_needles);
         let new_gaps: Vec<(usize, usize)> = gaps
             .into_iter()
             .filter_map(|(s, e)| {
@@ -632,7 +638,8 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
                 })
                 .collect();
             let mut empty = Vec::new();
-            let (mut out, _) = render_step(&raw[..safe_end], &mut clamped, &mut empty);
+            let (mut out, _) =
+                render_step(&raw[..safe_end], &mut clamped, &mut empty, &short_needles);
             if safe_end < raw.len() && !out.ends_with('…') {
                 out.push('…');
             }
@@ -658,10 +665,14 @@ fn after_name_offset(src: &str, after_pos: usize) -> Option<usize> {
 }
 
 /// The secret with all but its start hidden. At most 4 characters are kept, and never more
-/// than a third of the value, so a short password is not printed whole.
-fn mask(secret: &str) -> String {
+/// than a third of the value, so a short password is not printed whole. If keeping that prefix
+/// would expose another short secret recorded on the same line, drop the prefix.
+fn mask(secret: &str, short_needles: &[&str]) -> String {
     let n = secret.chars().take(12).count();
     let keep: String = secret.chars().take(4.min(n / 3)).collect();
+    if !keep.is_empty() && short_needles.iter().any(|s| keep.contains(s)) {
+        return "****".to_string();
+    }
     format!("{keep}****")
 }
 
@@ -1359,6 +1370,20 @@ mod tests {
                 );
             }
         }
+
+        // A longer secret's 4-char mask prefix must not expose a shorter multi-byte secret on the same line.
+        let short_mb = ["日", "本", "語"].concat();
+        let long_mb = format!("{short_mb}ABCDEFGHIJ");
+        let prefix_leak_mcp = format!(
+            "{{\"mcpServers\":{{\"s\":{{\"env\":{{\"API_TOKEN\":\"{short_mb}\",\"DB_PASSWORD\":\"{long_mb}\"}}}}}}}}\n"
+        );
+        let found = check(&FileInfo::new(".mcp.json"), &prefix_leak_mcp, false);
+        assert_eq!(found.len(), 1);
+        assert!(
+            !found[0].snippet.contains(&short_mb),
+            "short multi-byte secret leaked via another secret's prefix: {}",
+            found[0].snippet
+        );
 
         // Multi-line password assignment also masks a copy on the assignment's first line.
         let multiline_pw = format!("log(\"{pass}\"); password =\n  \"{pass}\";\n");
