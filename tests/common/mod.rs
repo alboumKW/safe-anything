@@ -134,6 +134,9 @@ pub fn fake(name: &str) -> String {
         "doppler" => ["dp", ".pt.", &body(43, MIXED)].concat(),
         "rubygems" => ["ruby", "gems_", &body(48, HEX)].concat(),
         "rubygems-upper" => ["ruby", "gems_", &body(48, HEX).to_uppercase()].concat(),
+        "databricks" => ["da", "pi", &body(32, HEX)].concat(),
+        "databricks-suffix" => ["da", "pi", &body(32, HEX), "-2"].concat(),
+        "databricks-upper" => ["da", "pi", &body(32, HEX).to_uppercase()].concat(),
         other => panic!("no fake value named {other}"),
     }
 }
