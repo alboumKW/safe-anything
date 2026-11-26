@@ -426,8 +426,77 @@ fn render_step(
     }
 }
 
-/// Apply every redaction recorded for one line, also masking any repeated copies of those secret
-/// values that touch a rendered plain-text gap in the 160-character snippet.
+fn parse_json_escape(slice: &str, i: usize) -> Option<(char, usize)> {
+    let b = slice.as_bytes();
+    let next = *b.get(i + 1)?;
+    let simple = match next {
+        b'"' => Some('"'),
+        b'\\' => Some('\\'),
+        b'/' => Some('/'),
+        b'b' => Some('\x08'),
+        b'f' => Some('\x0c'),
+        b'n' => Some('\n'),
+        b'r' => Some('\r'),
+        b't' => Some('\t'),
+        _ => None,
+    };
+    if let Some(ch) = simple {
+        return Some((ch, 2));
+    }
+    if next != b'u' {
+        return None;
+    }
+    let hex1 = slice.get(i + 2..i + 6)?;
+    let u1 = u16::from_str_radix(hex1, 16).ok()?;
+    if (0xD800..=0xDBFF).contains(&u1)
+        && slice.get(i + 6..i + 8) == Some(r"\u")
+        && let Some(hex2) = slice.get(i + 8..i + 12)
+        && let Ok(u2) = u16::from_str_radix(hex2, 16)
+        && (0xDC00..=0xDFFF).contains(&u2)
+    {
+        let cp = 0x10000 + (((u1 as u32 - 0xD800) << 10) | (u2 as u32 - 0xDC00));
+        return char::from_u32(cp).map(|ch| (ch, 12));
+    }
+    char::from_u32(u1 as u32).map(|ch| (ch, 6))
+}
+
+/// Decode JSON escape sequences in `slice`, returning the decoded string along with the source
+/// byte range `[raw_starts[d], raw_ends[d])` in `slice` that produced each decoded byte `d`.
+fn decode_json_escapes(slice: &str) -> (String, Vec<usize>, Vec<usize>) {
+    let b = slice.as_bytes();
+    let mut decoded = String::with_capacity(slice.len());
+    let mut raw_starts = Vec::with_capacity(slice.len());
+    let mut raw_ends = Vec::with_capacity(slice.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\'
+            && let Some((ch, esc_len)) = parse_json_escape(slice, i)
+        {
+            let mut buf = [0u8; 4];
+            let s = ch.encode_utf8(&mut buf);
+            decoded.push_str(s);
+            for _ in 0..s.len() {
+                raw_starts.push(i);
+                raw_ends.push(i + esc_len);
+            }
+            i += esc_len;
+            continue;
+        }
+        let ch = slice[i..].chars().next().unwrap();
+        let clen = ch.len_utf8();
+        decoded.push(ch);
+        for _ in 0..clen {
+            raw_starts.push(i);
+            raw_ends.push(i + clen);
+        }
+        i += clen;
+    }
+    (decoded, raw_starts, raw_ends)
+}
+
+/// Apply every redaction recorded for one line, also masking any repeated copies (including
+/// JSON-escaped spellings such as `\/` or `\uXXXX`) that touch a rendered plain-text gap in the
+/// 160-character snippet.
 fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> String {
     const MAX_ROUNDS: usize = 8;
     let raw_end = raw_start + raw.len();
@@ -461,19 +530,12 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
             });
         }
     }
-    let mut owned_needles: Vec<String> = Vec::new();
     for lit in &lr.literals {
-        if seen_needles.insert(lit.as_str()) {
+        if !lit.is_empty() && seen_needles.insert(lit.as_str()) {
             needles.push(lit.as_str());
         }
-        if let Ok(encoded) = serde_json::to_string(lit)
-            && let Some(inner) = encoded.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
-            && inner != lit
-            && !inner.is_empty()
-        {
-            owned_needles.push(inner.to_string());
-        }
     }
+    let max_esc_pad = needles.iter().map(|n| n.len()).max().unwrap_or(0).min(512) * 6;
 
     merge_spans(raw.len(), &mut initial);
     initial.reverse();
@@ -494,11 +556,7 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
             return snippet;
         }
         let mut new_spans: Vec<Redact> = Vec::new();
-        for needle in needles
-            .iter()
-            .copied()
-            .chain(owned_needles.iter().map(String::as_str))
-        {
+        for &needle in &needles {
             if needle.is_empty() {
                 continue;
             }
@@ -515,6 +573,33 @@ fn render_redacted_line(raw: &str, raw_start: usize, lr: &LineRedactions) -> Str
                             end,
                             keep_prefix: true,
                         });
+                    }
+                }
+            }
+        }
+        if max_esc_pad > 0 {
+            for &(g_start, g_end) in &new_gaps {
+                let scan_start = ceil_char_boundary(raw, g_start.saturating_sub(max_esc_pad));
+                let scan_end = ceil_char_boundary(raw, g_end.saturating_add(max_esc_pad));
+                let window = &raw[scan_start..scan_end];
+                if !window.contains('\\') {
+                    continue;
+                }
+                let (decoded, raw_starts, raw_ends) = decode_json_escapes(window);
+                for &needle in &needles {
+                    if needle.is_empty() {
+                        continue;
+                    }
+                    for (d_idx, _) in decoded.match_indices(needle) {
+                        let idx = scan_start + raw_starts[d_idx];
+                        let end = scan_start + raw_ends[d_idx + needle.len() - 1];
+                        if idx < g_end && end > g_start {
+                            new_spans.push(Redact {
+                                start: idx,
+                                end,
+                                keep_prefix: true,
+                            });
+                        }
                     }
                 }
             }
@@ -1253,6 +1338,27 @@ mod tests {
         let found = check(&FileInfo::new(".mcp.json"), &mixed_esc_mcp, false);
         assert_eq!(found.len(), 1);
         assert!(!found[0].snippet.contains("PlainCopy99"));
+
+        // Plain MCP value in env and JSON-escaped (\/ or \uXXXX) copy in args on one line.
+        let tok_plain = ["tok/", "enSecret99"].concat();
+        let tok_slash = [r"tok\/", "enSecret99"].concat();
+        let tok_uni = [r"tok\u002f", "enSecret99"].concat();
+        for arg_copy in [&tok_slash, &tok_uni] {
+            let escaped_arg_mcp = format!(
+                "{{\"mcpServers\":{{\"s\":{{\"command\":\"npx\",\"args\":[\"-y\",\"pkg\",\"--t={arg_copy}\"],\"env\":{{\"API_TOKEN\":\"{tok_plain}\"}}}}}}}}\n"
+            );
+            let found = check(&FileInfo::new(".mcp.json"), &escaped_arg_mcp, false);
+            assert!(found.iter().any(|f| f.rule == "agent.mcp-unpinned"));
+            assert!(found.iter().any(|f| f.rule == "agent.mcp-plaintext-secret"));
+            for f in &found {
+                assert!(
+                    !f.snippet.contains("enSecret99"),
+                    "JSON-escaped copy leaked in {}: {}",
+                    f.rule,
+                    f.snippet
+                );
+            }
+        }
 
         // Multi-line password assignment also masks a copy on the assignment's first line.
         let multiline_pw = format!("log(\"{pass}\"); password =\n  \"{pass}\";\n");
