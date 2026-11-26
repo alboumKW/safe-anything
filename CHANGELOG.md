@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Secrets: new rule `secret.databricks-token` (critical) for Databricks personal access tokens (`dapi`
+  followed by 32 lowercase hex characters, optionally followed by `-` and one digit such as `-2`).
 - Secrets: `secret.env-file` and `secret.env-example-value` now catch values followed by an inline
   `#` comment (quoted or unquoted), leaving the comment out of the masked snippet. A `#` inside an
   unquoted value with no space before it stays part of the value, and placeholders followed by a
@@ -50,7 +52,6 @@
   `secret.grafana-token` Grafana service account tokens (`glsa_`, 32 letters or digits, `_`, 8 hex) and
   `secret.doppler-token` Doppler personal tokens (`dp.pt.` and 43 letters or digits).
 - Secrets: new rule `secret.rubygems-token` (critical) for RubyGems API keys (`rubygems_` followed by 48 lowercase hex characters).
-- Secrets: new rule `secret.databricks-token` (critical) for Databricks personal access tokens (`dapi` followed by 32 lowercase hex characters, optionally followed by `-` and one digit such as `-2`).
 
 ## 1.1.0 (2026-11-25)
 
