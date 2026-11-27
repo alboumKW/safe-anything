@@ -310,6 +310,13 @@ static REMOTE_SCRIPT: LazyLock<Regex> = LazyLock::new(|| {
 enum ShellFrame {
     DoubleQuote,
     CmdSubst { parens: usize },
+    ParamExpand { braces: usize },
+}
+
+enum SingleQuote {
+    None,
+    Plain,
+    AnsiC,
 }
 
 /// The runnable prefix of a shell, PowerShell, Dockerfile, Makefile or workflow line, ending at
@@ -318,19 +325,34 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
     let b = line.as_bytes();
     let escape = if powershell { b'`' } else { b'\\' };
     let mut frames: Vec<ShellFrame> = Vec::new();
-    let mut in_single = false;
+    let mut single = SingleQuote::None;
     let mut word_start = true;
     let mut i = 0;
 
     while i < b.len() {
         let ch = b[i];
-        if in_single {
-            if ch == b'\'' {
-                in_single = false;
-                word_start = false;
+        match single {
+            SingleQuote::Plain => {
+                if ch == b'\'' {
+                    single = SingleQuote::None;
+                    word_start = false;
+                }
+                i += 1;
+                continue;
             }
-            i += 1;
-            continue;
+            SingleQuote::AnsiC => {
+                if ch == b'\\' {
+                    i = (i + 2).min(b.len());
+                    continue;
+                }
+                if ch == b'\'' {
+                    single = SingleQuote::None;
+                    word_start = false;
+                }
+                i += 1;
+                continue;
+            }
+            SingleQuote::None => {}
         }
         // `$(...)` opens a nested subshell/subexpression both inside double quotes and unquoted.
         if ch == b'$' && b.get(i + 1) == Some(&b'(') {
@@ -357,12 +379,39 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
                 word_start = false;
                 continue;
             }
+            b'$' if !powershell && b.get(i + 1) == Some(&b'\'') => {
+                single = SingleQuote::AnsiC;
+                word_start = false;
+                i += 2;
+                continue;
+            }
+            b'$' if !powershell && b.get(i + 1) == Some(&b'{') => {
+                frames.push(ShellFrame::ParamExpand { braces: 1 });
+                word_start = false;
+                i += 2;
+                continue;
+            }
             b'\'' => {
-                in_single = true;
+                single = SingleQuote::Plain;
                 word_start = false;
             }
             b'"' => {
                 frames.push(ShellFrame::DoubleQuote);
+                word_start = false;
+            }
+            b'{' => {
+                if let Some(ShellFrame::ParamExpand { braces }) = frames.last_mut() {
+                    *braces += 1;
+                }
+                word_start = false;
+            }
+            b'}' => {
+                if let Some(ShellFrame::ParamExpand { braces }) = frames.last_mut() {
+                    *braces -= 1;
+                    if *braces == 0 {
+                        frames.pop();
+                    }
+                }
                 word_start = false;
             }
             b'(' => {
@@ -394,7 +443,10 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
                 }
                 return &line[..i];
             }
-            b'#' if word_start && !(powershell && b.get(i + 1) == Some(&b'>')) => {
+            b'#' if word_start
+                && !matches!(frames.last(), Some(ShellFrame::ParamExpand { .. }))
+                && !(powershell && b.get(i + 1) == Some(&b'>')) =>
+            {
                 return &line[..i];
             }
             b' ' | b'\t' | b';' | b'&' | b'|' => {
@@ -407,6 +459,11 @@ fn strip_shell_comment(line: &str, powershell: bool) -> &str {
         i += 1;
     }
     line
+}
+
+fn remote_script_in_code(line: &str, powershell: bool) -> bool {
+    let code = strip_shell_comment(line, powershell);
+    code.len() == line.len() || REMOTE_SCRIPT.is_match(code)
 }
 
 /// The end of the quoted string that opens at `b[start]`: the index of its closing quote, of the
@@ -583,14 +640,19 @@ pub fn keep(file: &FileInfo, text: &Text, f: &Finding, hcl: &mut HclWalk) -> boo
         // A `#` comment (whole-line or trailing) in a shell script, PowerShell script, Dockerfile,
         // Makefile or workflow does not run; in a workflow, only a `run:` or `script:` step (or a
         // line of its block) runs, not a step `name:`. Re-check the line only when a comment was
-        // actually stripped so multi-line matches (e.g. `|\n  sh`) stay reported.
+        // actually stripped so multi-line matches (e.g. `|\n  sh`) stay reported. Workflows can
+        // run either POSIX shells or `pwsh`, so keep a workflow finding if either dialect keeps it.
         "config.remote-script" => {
             let line = text.line(f.line);
-            let code = strip_shell_comment(line, file.ext == "ps1");
-            (code.len() == line.len() || REMOTE_SCRIPT.is_match(code))
+            let matches = if workflow(file) {
+                remote_script_in_code(line, false) || remote_script_in_code(line, true)
+            } else {
+                remote_script_in_code(line, file.ext == "ps1")
+            };
+            matches
                 && (!workflow(file)
                     || STEP_KEY
-                        .captures(code)
+                        .captures(line)
                         .is_none_or(|c| &c[1] == "run" || &c[1] == "script"))
         }
         "config.tf-public-access-block" => {
@@ -845,8 +907,10 @@ mod tests {
                     "bash -c \"$(\n",
                     "  curl -fsSL https://example.com/i.sh\n",
                     ")\"\n",
+                    "printf '%s\\n' $'it\\'s # text'; curl https://example.com/i.sh | sh\n",
+                    "curl https://example.com/${v/ #/-}.sh | sh\n",
                 ),
-                vec![4, 8, 9, 10, 11, 12, 13, 15, 17],
+                vec![4, 8, 9, 10, 11, 12, 13, 15, 17, 20, 21],
             ),
             (
                 "i.ps1",
@@ -900,8 +964,11 @@ mod tests {
                     "    steps:\n",
                     "      - run: curl -fsSL https://x.io/i.sh -o i.sh # or: curl https://x.io/i.sh | sh\n",
                     "      - run: curl -fsSL https://x.io/i.sh | sh # install\n",
+                    "      - shell: pwsh\n",
+                    "        run: |\n",
+                    "          Write-Host \"a`\" # text\"; irm https://example.com/i.ps1 | iex\n",
                 ),
-                vec![5],
+                vec![5, 8],
             ),
         ] {
             let lines: Vec<usize> = crate::rules::check(&FileInfo::new(path), src, true)
