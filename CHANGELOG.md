@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report: the summary line says `Scanned 1 file` and `1 package checked against OSV.dev` for a
+  count of one; other counts stay plural.
 - Code: the JavaScript and Python patterns in `code.sql-injection` now also match escaped
   newlines, tabs and carriage returns (`\n`, `\t`, `\r`) inside quoted query strings
   (`db.query("SELECT id\nFROM users WHERE id = " + id)`,
