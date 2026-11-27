@@ -12,6 +12,9 @@
   ``sql<Row[]>`...` ``). The tag receives the values apart from the query text and binds them.
   An untagged template literal and a raw tag (`String.raw`, `sql.raw`, `sql.unsafe`) are still
   reported.
+- Dependencies: `bun.lock` (bun's text lockfile, bun 1.2 and later) is read. A repository with
+  only that lockfile used to report `0 packages checked against OSV.dev`. Workspace, git, file
+  and tarball entries are skipped, like in the other lockfiles.
 - Secrets: `secret.hardcoded-password` no longer lets a placeholder-like value elsewhere on the
   line hide a real password. The placeholder check now only looks at the value right after the
   matched name, so `connect(user="testuser", password="...")` and
