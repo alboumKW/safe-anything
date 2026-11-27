@@ -19,6 +19,8 @@
   letters and digits).
 - Secrets: new rule `secret.openrouter-key` (critical) for OpenRouter API keys (`sk-or-v1-` followed
   by 64 lower-case hex characters).
+- Secrets: new rule `secret.newrelic-key` (critical) for New Relic user API keys (`NRAK-` followed
+  by 27 upper-case letters and digits).
 - Report: the summary line says `Scanned 1 file` and `1 package checked against OSV.dev` for a
   count of one; other counts stay plural.
 - Code: the JavaScript and Python patterns in `code.sql-injection` now also match escaped
