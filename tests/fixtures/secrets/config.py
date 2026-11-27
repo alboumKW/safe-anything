@@ -112,3 +112,6 @@ openrouter_lookalike = "{{fake:openrouter-short}} {{fake:openrouter-upper}} my{{
 newrelic = "{{fake:newrelic}}"
 newrelic_lookalike = "{{fake:newrelic-short}} my{{fake:newrelic}} {{fake:newrelic}}A"
 newrelic_escaped = "line\\n{{fake:newrelic}}"
+flyio = "{{fake:flyio}}"
+flyio_lookalike = "{{fake:flyio-short}} my{{fake:flyio}} {{fake:flyio}}a"
+flyio_escaped = "line\\n{{fake:flyio}}"

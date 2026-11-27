@@ -402,6 +402,12 @@ pub static RULES: &[Rule] = &[
         "A Heroku API key is written in the file."
     ),
     secret!(
+        "secret.flyio-token",
+        Critical,
+        r"(?:\\[nrt]|\b)(fo1_[A-Za-z0-9_\-]{43})(?:[^A-Za-z0-9_\-]|\z)",
+        "A Fly.io access token is written in the file."
+    ),
+    secret!(
         "secret.databricks-token",
         Critical,
         r"\bdapi[0-9a-f]{32}(?:-\d)?\b",
